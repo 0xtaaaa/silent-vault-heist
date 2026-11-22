@@ -1,8 +1,8 @@
 # SILENT VAULT — a heist in three rooms
 
-![bounty](https://make.fun/badge/best-heist-game-20261122-0559.svg)
-![rank](https://make.fun/0xtaaaa/silent-vault-heist/rank.svg)
-![reward](https://make.fun/0xtaaaa/silent-vault-heist/reward.svg)
+[![make.fun · best-heist-game-20261122-0559](https://make.fun/badge/best-heist-game-20261122-0559.svg)](https://make.fun/bounty/best-heist-game-20261122-0559?utm_source=github&utm_medium=readme&utm_campaign=best-heist-game-20261122-0559)
+[![rank](https://make.fun/badge/best-heist-game-20261122-0559/0xtaaaa/silent-vault-heist/rank.svg)](https://make.fun/bounty/best-heist-game-20261122-0559/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-heist-game-20261122-0559)
+[![reward](https://make.fun/badge/best-heist-game-20261122-0559/0xtaaaa/silent-vault-heist/reward.svg)](https://make.fun/bounty/best-heist-game-20261122-0559?utm_source=github&utm_medium=readme&utm_campaign=best-heist-game-20261122-0559)
 
 Rook the thief has one night in the Halcyon Vault: three rooms, a pocket
 full of coins, one EMP — and a getaway door that only opens when every
