@@ -78,5 +78,24 @@ export const SCORE = {
   parSeconds: 150,
 };
 
+// Elite guards: the vault's professionals. Faster on patrol and in a
+// chase, a longer and wider cone, and they stay on a noise longer.
+export const ELITE = {
+  visionRange: 270,
+  coneHalf: Math.PI / 3.2, // ~112-degree cone
+  patrol: 92,
+  chase: 196,
+  searchTime: 6.5,
+};
+
+// The hacking minigame: three locks, each narrower and faster than the
+// last. A terminal hack blinds every camera for this long; a failed hack
+// jumps the alarm by this much.
+export const HACK = {
+  rounds: 3,
+  blackoutSeconds: 20,
+  failAlarm: 25,
+};
+
 export const STRIKES_PER_LEVEL = 3;
 export const STEP = 1 / 60;

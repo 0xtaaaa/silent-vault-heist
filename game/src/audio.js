@@ -119,6 +119,16 @@ export function createAudio() {
       tone(659, 0.14, 'sine', 0.2, 0.12);
       tone(784, 0.26, 'sine', 0.2, 0.24);
     },
+    hackTick() {
+      tone(1500, 0.05, 'square', 0.1);
+    },
+    hackWin() {
+      tone(1046, 0.12, 'sine', 0.2);
+      tone(1568, 0.2, 'sine', 0.2, 0.1);
+    },
+    hackFail() {
+      tone(180, 0.3, 'sawtooth', 0.2, 0, 90);
+    },
     win() {
       [523, 659, 784, 1046].forEach((f, i) => tone(f, 0.22, 'sine', 0.2, i * 0.13));
     },

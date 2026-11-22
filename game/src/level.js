@@ -1,9 +1,13 @@
-// The three rooms of the Halcyon Vault. Maps are strings, one per row:
+// The five rooms of the Halcyon Vault. Maps are strings, one per row:
 //   # wall   . floor   , shadow floor (dark zone: guards see the thief slower)
-//   P thief start   E getaway door   L loot
+//   P thief start   E getaway door
+//   L relic   G gold bar   D data drive   A art piece (loot, worth more than a relic)
+//   T security terminal   S safe (hack to use)
 // Guards and cameras are data, not map letters: their patrol routes and
 // sweep arcs are part of the level design, so they read as a plan.
+// Rooms four and five live in rooms2.js; the first three are here.
 import { TILE } from './config.js';
+import { LEVELS_EXTRA } from './rooms2.js';
 
 function tileCenter(tx, ty) {
   return { x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 };
@@ -39,6 +43,9 @@ export const LEVELS = [
       { waypoints: [[10, 2], [10, 8], [20, 8], [20, 2]] },
       { waypoints: [[30, 10], [30, 16], [35, 16], [35, 10]] },
     ],
+    hardGuards: [
+      { waypoints: [[24, 17], [24, 18], [32, 18], [32, 17]] },
+    ],
     cameras: [
       { tx: 19, ty: 4, angle: 0, sweep: 0.9 },
     ],
@@ -72,6 +79,9 @@ export const LEVELS = [
       { waypoints: [[6, 2], [6, 6], [13, 6], [13, 2]] },
       { waypoints: [[24, 2], [24, 13], [30, 13], [30, 2]] },
       { waypoints: [[8, 10], [8, 15], [20, 15], [20, 10]] },
+    ],
+    hardGuards: [
+      { waypoints: [[22, 8], [22, 9], [30, 9], [30, 8]] },
     ],
     cameras: [
       { tx: 11, ty: 7, angle: Math.PI / 2, sweep: 1.1 },
@@ -109,12 +119,16 @@ export const LEVELS = [
       { waypoints: [[8, 10], [8, 15], [18, 15], [18, 10]] },
       { waypoints: [[30, 10], [30, 15], [36, 15], [36, 10]] },
     ],
+    hardGuards: [
+      { waypoints: [[24, 16], [24, 18], [30, 18], [30, 16]] },
+    ],
     cameras: [
       { tx: 5, ty: 6, angle: Math.PI / 2, sweep: 1.0 },
       { tx: 19, ty: 6, angle: Math.PI / 2, sweep: 1.0 },
       { tx: 32, ty: 6, angle: Math.PI / 2, sweep: 1.0 },
     ],
   },
+  ...LEVELS_EXTRA,
 ];
 
 /** Parse one level's map into walkable grids and placed objects. */
@@ -125,16 +139,26 @@ export function parseLevel(def) {
   let start = { x: 2 * TILE, y: 2 * TILE };
   let exit = { x: 37 * TILE, y: 2 * TILE };
   const loot = [];
+  const terminals = [];
+  const safes = [];
+  const LOOT_KIND = { L: 'relic', G: 'gold', D: 'data', A: 'art' };
   for (let y = 0; y < grid.length; y += 1) {
     for (let x = 0; x < grid[y].length; x += 1) {
       const c = grid[y][x];
       if (c === 'P') start = tileCenter(x, y);
       else if (c === 'E') exit = tileCenter(x, y);
-      else if (c === 'L') loot.push({ x: x * TILE + TILE / 2, y: y * TILE + TILE / 2, taken: false });
+      else if (LOOT_KIND[c]) loot.push({ x: x * TILE + TILE / 2, y: y * TILE + TILE / 2, taken: false, kind: LOOT_KIND[c] });
+      else if (c === 'T') terminals.push({ x: x * TILE + TILE / 2, y: y * TILE + TILE / 2, used: false });
+      else if (c === 'S') safes.push({ x: x * TILE + TILE / 2, y: y * TILE + TILE / 2, opened: false, value: 300 });
     }
   }
   const guards = def.guards.map((g) => ({
     waypoints: g.waypoints.map(([tx, ty]) => tileCenter(tx, ty)),
+    elite: !!g.elite,
+  }));
+  const hardGuards = (def.hardGuards ?? []).map((g) => ({
+    waypoints: g.waypoints.map(([tx, ty]) => tileCenter(tx, ty)),
+    elite: !!g.elite,
   }));
   const cameras = def.cameras.map((c) => ({
     x: c.tx * TILE + TILE / 2,
@@ -143,7 +167,7 @@ export function parseLevel(def) {
     sweep: c.sweep,
     phase: 0,
   }));
-  return { name: def.name, sub: def.sub, grid, shadow, walkable, start, exit, loot, guards, cameras };
+  return { name: def.name, sub: def.sub, grid, shadow, walkable, start, exit, loot, terminals, safes, guards, hardGuards, cameras };
 }
 
 /** Is the pixel point inside a wall tile? Out of bounds counts as wall. */

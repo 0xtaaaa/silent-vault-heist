@@ -1,19 +1,26 @@
 // SILENT VAULT — boot and the one loop. The world advances in fixed 1/60 s
 // steps (several in a slow frame, none in a fast one), the renderer paints
 // what is there, and the game moves between eight screens: title, intro,
-// play, paused, busted, room clear, win and game over.
+// play, paused, busted, room clear, win and game over. Five rooms now:
+// the Lobby, the Gallery, the Vault, the Server Room and the Safe Deposit.
+// Terminals and safes open a hacking minigame (F, then SPACE to lock the
+// marker); difficulty (1/2/3 on the title) changes the guard count, the
+// camera speed and how fast the alarm climbs.
 //
 // ?seed=N fixes the run. ?shot=start|play|chase|mission (with &seed=N)
 // stages that scene instead of running the loop, paints it twice and sets
 // window.__shotReady for a screenshot.
-import { ALARM, CAMERA, FIELD_Y, GUARD, PLAYER, SCORE, STEP, STRIKES_PER_LEVEL, TILE, TOOLS } from './config.js';
+import { ALARM, CAMERA, FIELD_Y, GUARD, HACK, PLAYER, SCORE, STEP, STRIKES_PER_LEVEL, TILE, TOOLS } from './config.js';
 import { LEVELS, hasLineOfSight, isShadow, parseLevel } from './level.js';
 import { STATE_ALERT, STATE_SUSPICIOUS, createGuard, hearNoise, updateGuard } from './guards.js';
 import { cameraSees, createCamera, updateCamera } from './cameras.js';
 import { createPlayer, playerNoiseRadius, updatePlayer } from './player.js';
 import { createAudio } from './audio.js';
-import { ACTION_COIN, ACTION_CONFIRM, ACTION_EMP, ACTION_PAUSE, createInput } from './input.js';
+import { ACTION_COIN, ACTION_CONFIRM, ACTION_EMP, ACTION_HACK, ACTION_PAUSE, createInput } from './input.js';
 import { SCREEN_BUSTED, SCREEN_CLEAR, SCREEN_INTRO, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE, SCREEN_WIN, createRenderer } from './render.js';
+import { createHack, lockHack, updateHack } from './hack.js';
+import { difficultyOf } from './difficulty.js';
+import { ALARM_PENALTY, LOOT_LABELS, lootValue } from './scoring.js';
 import { stageShot } from './shots.js';
 
 const BEST_KEY = 'silent-vault.best';
@@ -73,7 +80,24 @@ export function createWorld() {
     toastLeft: 0,
     clearBonus: null,
     cleared: false, // the getaway pays once per room, not once per step
+    roomCount: LEVELS.length,
+    difficulty: 'normal',
+    cameraMul: 1,
+    alarmMul: 1,
+    hack: null, // the open hacking minigame, or null
+    lootValue: 0, // dollars of loot pocketed this run
+    bonusTotal: 0, // time + ghost bonuses banked this run
+    alarmPenalties: 0, // dollars lost to strikes this run
   };
+
+  /** The guards for the current room under the chosen difficulty. */
+  function buildGuards() {
+    const def = difficultyOf(world.difficulty);
+    let guardDefs = world.level.guards;
+    if (def.guardSkip > 0) guardDefs = guardDefs.slice(0, Math.max(1, guardDefs.length - def.guardSkip));
+    if (def.extraGuard) guardDefs = guardDefs.concat(world.level.hardGuards);
+    return guardDefs.map(createGuard);
+  }
 
   function loadLevel(index) {
     world.levelIndex = index;
@@ -81,7 +105,7 @@ export function createWorld() {
     world.levelName = world.level.name;
     world.levelSub = world.level.sub;
     world.player = createPlayer(world.level.start);
-    world.guards = world.level.guards.map(createGuard);
+    world.guards = buildGuards();
     world.cameras = world.level.cameras.map(createCamera);
     world.coins = [];
     world.alarm = 0;
@@ -94,6 +118,10 @@ export function createWorld() {
     world.toast = null;
     world.clearBonus = null;
     world.cleared = false;
+    world.hack = null;
+    const def = difficultyOf(world.difficulty);
+    world.cameraMul = def.cameraMul;
+    world.alarmMul = def.alarmMul;
   }
 
   /** Back to the room's start: guards home, alarm cold. Kept loot stays kept. */
@@ -102,12 +130,13 @@ export function createWorld() {
     world.player.x = start.x;
     world.player.y = start.y;
     world.player.angle = 0;
-    world.guards = world.level.guards.map(createGuard);
+    world.guards = buildGuards();
     world.cameras = world.level.cameras.map(createCamera);
     world.coins = [];
     world.alarm = 0;
     world.empLeft = 0;
     world.levelElapsed = 0;
+    world.hack = null;
   }
 
   function showToast(text, seconds = 2.5) {
@@ -161,6 +190,62 @@ export function createWorld() {
     showToast(`EMP fired — cameras blind for ${TOOLS.empSeconds}s`);
   }
 
+  /** The nearest hackable thing in reach: an unused terminal, else an unopened safe. */
+  function hackableNear() {
+    const player = world.player;
+    for (const term of world.level.terminals) {
+      if (!term.used && Math.hypot(term.x - player.x, term.y - player.y) < 38) return { kind: 'terminal', target: term };
+    }
+    for (const safe of world.level.safes) {
+      if (!safe.opened && Math.hypot(safe.x - player.x, safe.y - player.y) < 38) return { kind: 'safe', target: safe };
+    }
+    return null;
+  }
+
+  /** Open the hacking minigame on the nearest terminal or safe. */
+  function openHack() {
+    const near = hackableNear();
+    if (!near) {
+      showToast('No terminal or safe in reach — stand closer');
+      return;
+    }
+    world.hack = createHack(near.kind, near.target);
+    audio.hackTick();
+    showToast(near.kind === 'terminal' ? 'Hacking the security terminal — SPACE to lock' : 'Cracking the safe — SPACE to lock');
+  }
+
+  /** Resolve one lock of the open hack: hit, done, or a loud miss. */
+  function resolveHack() {
+    const hack = world.hack;
+    if (!hack) return;
+    const result = lockHack(hack);
+    if (result === 'hit') {
+      audio.hackTick();
+      return;
+    }
+    if (result === 'done') {
+      audio.hackWin();
+      if (hack.kind === 'terminal') {
+        hack.target.used = true;
+        for (const cam of world.cameras) cam.disabled = HACK.blackoutSeconds;
+        showToast(`Terminal hacked — cameras blind for ${HACK.blackoutSeconds}s`);
+      } else {
+        hack.target.opened = true;
+        world.score += hack.target.value;
+        world.lootValue += hack.target.value;
+        showToast(`Safe cracked +$${hack.target.value}`);
+      }
+      world.hack = null;
+      return;
+    }
+    // Miss: the hack fails loud.
+    audio.hackFail();
+    world.alarm = Math.min(ALARM.caughtAt, world.alarm + HACK.failAlarm);
+    world.alarmPeak = Math.max(world.alarmPeak, world.alarm);
+    showToast(`Hack failed — the alarm jumps +${HACK.failAlarm}%`);
+    world.hack = null;
+  }
+
   /**
    * One fixed step of the live room. Returns the events that happened, so
    * the loop can react (sounds, screens) without the world knowing about
@@ -180,6 +265,7 @@ export function createWorld() {
 
     if (actions.coin) throwCoin(actions.aim);
     if (actions.emp) fireEmp();
+    if (actions.hack) openHack();
     updatePlayer(world.level, world.player, steer, dt);
     audio.step(world.player.running, world.player.moving, world.time);
 
@@ -203,7 +289,7 @@ export function createWorld() {
       anySus = anySus || guard.state === STATE_SUSPICIOUS;
     }
     for (const cam of world.cameras) {
-      updateCamera(world.level, cam, dt);
+      updateCamera(world.level, cam, dt, world.cameraMul);
       if (cameraSees(world.level, cam, world.player)) camSees = true;
     }
     if (events.alert) audio.alert();
@@ -217,9 +303,10 @@ export function createWorld() {
     audio.guardStep(Math.max(0, 1 - nearest / 320), world.time);
 
     // The alarm climbs while anyone is on the thief, and cools when not.
-    if (anyAlert) world.alarm += ALARM.alertRise * dt;
-    else if (anySus) world.alarm += ALARM.suspiciousRise * dt;
-    if (camSees) world.alarm += CAMERA.fill * dt;
+    // Difficulty sets how fast it climbs.
+    if (anyAlert) world.alarm += ALARM.alertRise * world.alarmMul * dt;
+    else if (anySus) world.alarm += ALARM.suspiciousRise * world.alarmMul * dt;
+    if (camSees) world.alarm += CAMERA.fill * world.alarmMul * dt;
     if (!anyAlert && !anySus && !camSees) world.alarm -= ALARM.decay * dt;
     world.alarm = Math.max(0, Math.min(ALARM.caughtAt, world.alarm));
     world.alarmPeak = Math.max(world.alarmPeak, world.alarm);
@@ -228,16 +315,18 @@ export function createWorld() {
     for (const coin of world.coins) coin.ttl -= dt;
     world.coins = world.coins.filter((c) => c.ttl > 0);
 
-    // Loot.
+    // Loot: every kind is worth its own money.
     for (const loot of world.level.loot) {
       if (loot.taken) continue;
       if (Math.hypot(loot.x - world.player.x, loot.y - world.player.y) < 26) {
         loot.taken = true;
         world.lootTaken += 1;
-        world.score += SCORE.loot;
+        const value = lootValue(loot.kind);
+        world.score += value;
+        world.lootValue += value;
         events.loot = true;
         audio.pickup();
-        showToast(`Relic pocketed +${SCORE.loot}  (${world.lootTaken}/${world.lootTotal})`);
+        showToast(`${LOOT_LABELS[loot.kind]} pocketed +$${value}  (${world.lootTaken}/${world.lootTotal})`);
       }
     }
 
@@ -255,7 +344,8 @@ export function createWorld() {
         const timeBonus = Math.max(0, Math.round((SCORE.parSeconds - world.levelElapsed) * SCORE.timeBonusPerSecond));
         const ghostBonus = world.alarmPeak === 0 ? SCORE.ghostBonus : 0;
         world.score += timeBonus + ghostBonus;
-        world.clearBonus = { timeBonus, ghostBonus, lootText: `${world.lootTaken}/${world.lootTotal} relics · room ${world.levelIndex + 1}/3 clear` };
+        world.bonusTotal += timeBonus + ghostBonus;
+        world.clearBonus = { timeBonus, ghostBonus, lootText: `${world.lootTaken}/${world.lootTotal} loot · room ${world.levelIndex + 1}/${world.roomCount} clear` };
         events.clear = true;
         audio.levelClear();
         if (world.score > world.best) {
@@ -271,6 +361,8 @@ export function createWorld() {
   world.resetRoom = resetRoom;
   world.step = step;
   world.showToast = showToast;
+  world.openHack = openHack;
+  world.resolveHack = resolveHack;
   loadLevel(0);
   return world;
 }
@@ -287,6 +379,9 @@ function setScreen(next) {
 function startRun() {
   world.score = 0;
   world.elapsed = 0;
+  world.lootValue = 0;
+  world.bonusTotal = 0;
+  world.alarmPenalties = 0;
   world.best = readBest();
   world.loadLevel(0);
   setScreen(SCREEN_INTRO);
@@ -305,6 +400,9 @@ function nextRoom() {
 function handleCaught() {
   audio.caught();
   world.strikes -= 1;
+  // Getting caught costs score: a loud run still pays, just less.
+  world.score = Math.max(0, world.score - ALARM_PENALTY);
+  world.alarmPenalties += ALARM_PENALTY;
   if (world.strikes <= 0) {
     if (world.score > world.best) {
       world.best = world.score;
@@ -320,14 +418,23 @@ function handleCaught() {
 function update() {
   const steer = input.read();
   const taken = input.takeActions();
+  const diff = input.takeDifficulty();
   const aim = taken.mouse.clicked ? input.aim() : null;
   const actions = {
     coin: Boolean(taken.actions & ACTION_COIN) || Boolean(aim),
     emp: Boolean(taken.actions & ACTION_EMP),
+    hack: Boolean(taken.actions & ACTION_HACK),
     aim,
   };
+  if (diff && screen === SCREEN_TITLE) {
+    world.difficulty = diff;
+    audio.unlock();
+  }
   if (taken.actions & ACTION_PAUSE) {
-    if (screen === SCREEN_PLAY) setScreen(SCREEN_PAUSED);
+    if (world.hack) {
+      world.hack = null;
+      world.showToast('Hack aborted');
+    } else if (screen === SCREEN_PLAY) setScreen(SCREEN_PAUSED);
     else if (screen === SCREEN_PAUSED) setScreen(SCREEN_PLAY);
   }
   if (taken.actions & ACTION_CONFIRM) {
@@ -339,9 +446,15 @@ function update() {
     else if (screen === SCREEN_WIN || screen === SCREEN_OVER) startRun();
   }
   if (screen === SCREEN_PLAY) {
-    const events = world.step(STEP, steer, actions);
-    if (events.caught) handleCaught();
-    else if (events.clear) setScreen(SCREEN_CLEAR);
+    if (world.hack) {
+      // The hack freezes the room: the marker runs, the guards wait.
+      updateHack(world.hack, STEP);
+      if (taken.actions & ACTION_CONFIRM) world.resolveHack();
+    } else {
+      const events = world.step(STEP, steer, actions);
+      if (events.caught) handleCaught();
+      else if (events.clear) setScreen(SCREEN_CLEAR);
+    }
   }
 }
 
@@ -351,6 +464,7 @@ function render() {
     lootText: world.clearBonus?.lootText,
     timeBonus: world.clearBonus?.timeBonus,
     ghostBonus: world.clearBonus?.ghostBonus,
+    breakdown: `Loot $${world.lootValue} · Bonuses +$${world.bonusTotal} · Penalties -$${world.alarmPenalties}`,
   });
   status.textContent = `${world.levelName} — loot ${world.lootTaken}/${world.lootTotal}, alarm ${Math.round(world.alarm)}%`;
 }
@@ -380,6 +494,7 @@ if (shot) {
 } else {
   window.__heist = {
     world,
+    roomCount: LEVELS.length,
     get screen() {
       return screen;
     },

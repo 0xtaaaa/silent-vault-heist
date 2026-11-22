@@ -17,9 +17,9 @@ export function createCamera(def) {
   };
 }
 
-/** Sweep the mount; returns the cone polygon for drawing. */
-export function updateCamera(level, camera, dt) {
-  camera.phase += dt * CAMERA.sweepSpeed;
+/** Sweep the mount; returns the cone polygon for drawing. `sweepMul` is the difficulty's camera speed. */
+export function updateCamera(level, camera, dt, sweepMul = 1) {
+  camera.phase += dt * CAMERA.sweepSpeed * sweepMul;
   camera.angle = camera.baseAngle + Math.sin(camera.phase) * camera.sweep;
   if (camera.disabled > 0) camera.disabled -= dt;
   if (camera.disabled <= 0) {
