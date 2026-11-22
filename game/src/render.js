@@ -6,6 +6,7 @@
 import { FIELD_H, FIELD_W, FIELD_Y, GUARD, HUD_H, PLAYER, TILE, VIEW_H, VIEW_W } from './config.js';
 import { conePolygon } from './guards.js';
 import { STATE_ALERT, STATE_SUSPICIOUS } from './guards.js';
+import { ALARM_PENALTY } from './scoring.js';
 
 export const SCREEN_TITLE = 'title';
 export const SCREEN_INTRO = 'intro';
@@ -116,18 +117,81 @@ export function createRenderer(canvas) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(allLoot ? 'EXIT' : 'LOCK', level.exit.x, level.exit.y + 1);
-    // Loot: gold relics.
+    // Security terminals: hack one to blind every camera for a window.
+    for (const term of level.terminals ?? []) {
+      ctx.save();
+      ctx.fillStyle = term.used ? '#1e293b' : '#0e7490';
+      ctx.strokeStyle = term.used ? '#475569' : '#22d3ee';
+      ctx.lineWidth = 2;
+      roundRect(ctx, term.x - 14, term.y - 11, 28, 22, 4);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = term.used ? '#64748b' : '#a5f3fc';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText(term.used ? '×' : 'T', term.x, term.y + 1);
+      ctx.restore();
+    }
+    // Safes: steel boxes worth $300 once cracked open.
+    for (const safe of level.safes ?? []) {
+      ctx.save();
+      if (safe.opened) {
+        ctx.fillStyle = '#1e293b';
+        ctx.strokeStyle = '#f2c14e';
+        ctx.lineWidth = 2;
+        roundRect(ctx, safe.x - 13, safe.y - 13, 26, 26, 4);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = PALETTE.gold;
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillText('$', safe.x, safe.y + 1);
+      } else {
+        ctx.fillStyle = '#64748b';
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.lineWidth = 2;
+        roundRect(ctx, safe.x - 13, safe.y - 13, 26, 26, 4);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#0b0e14';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText('S', safe.x, safe.y + 1);
+      }
+      ctx.restore();
+    }
+    // Loot: each kind reads at a glance — relic diamond, gold bar, data
+    // drive, art piece.
     for (const loot of level.loot) {
       if (loot.taken) continue;
       const pulse = 1 + Math.sin(world.time * 3 + loot.x) * 0.12;
       ctx.save();
       ctx.translate(loot.x, loot.y);
-      ctx.rotate(Math.PI / 4);
-      ctx.fillStyle = PALETTE.gold;
-      ctx.shadowColor = PALETTE.gold;
-      ctx.shadowBlur = 10;
-      const s = 8 * pulse;
-      ctx.fillRect(-s, -s, s * 2, s * 2);
+      if (loot.kind === 'gold') {
+        ctx.fillStyle = '#fbbf24';
+        ctx.shadowColor = '#fbbf24';
+        ctx.shadowBlur = 10;
+        ctx.fillRect(-10 * pulse, -4 * pulse, 20 * pulse, 8 * pulse);
+      } else if (loot.kind === 'data') {
+        ctx.fillStyle = '#22d3ee';
+        ctx.shadowColor = '#22d3ee';
+        ctx.shadowBlur = 10;
+        const s = 7 * pulse;
+        ctx.fillRect(-s, -s, s * 2, s * 2);
+        ctx.fillStyle = '#ecfeff';
+        ctx.fillRect(-2, -2, 4, 4);
+      } else if (loot.kind === 'art') {
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = '#e879f9';
+        ctx.shadowColor = '#e879f9';
+        ctx.shadowBlur = 12;
+        const s = 11 * pulse;
+        ctx.fillRect(-s, -s, s * 2, s * 2);
+      } else {
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = PALETTE.gold;
+        ctx.shadowColor = PALETTE.gold;
+        ctx.shadowBlur = 10;
+        const s = 8 * pulse;
+        ctx.fillRect(-s, -s, s * 2, s * 2);
+      }
       ctx.restore();
     }
     // Thrown coins on the floor, still ringing.
@@ -148,14 +212,17 @@ export function createRenderer(canvas) {
       const poly = conePolygon(level, cam.x, cam.y, cam.angle, 250, Math.PI / 5, 20);
       drawCone(ctx, poly, PALETTE.camCone, PALETTE.camEdge);
     }
-    // Guard cones: amber on patrol, orange when suspicious, red on alert.
+    // Guard cones: amber on patrol, orange when suspicious, red on alert;
+    // elites sweep a wider violet cone.
     for (const guard of guards) {
-      const range = empLeft > 0 ? 230 * 0.7 : 230;
-      const poly = conePolygon(level, guard.x, guard.y, guard.angle, range, Math.PI / 4, 26);
-      const fill = guard.state === STATE_ALERT ? PALETTE.coneAlert
-        : guard.state === STATE_SUSPICIOUS ? PALETTE.coneSus : PALETTE.conePatrol;
-      const edge = guard.state === STATE_ALERT ? 'rgba(239,68,68,0.7)'
-        : guard.state === STATE_SUSPICIOUS ? 'rgba(245,158,11,0.6)' : PALETTE.coneEdge;
+      const range = (empLeft > 0 ? guard.range * 0.7 : guard.range);
+      const poly = conePolygon(level, guard.x, guard.y, guard.angle, range, guard.coneHalf, 26);
+      const fill = guard.elite ? 'rgba(167, 139, 250, 0.22)'
+        : guard.state === STATE_ALERT ? PALETTE.coneAlert
+          : guard.state === STATE_SUSPICIOUS ? PALETTE.coneSus : PALETTE.conePatrol;
+      const edge = guard.elite ? 'rgba(167, 139, 250, 0.65)'
+        : guard.state === STATE_ALERT ? 'rgba(239,68,68,0.7)'
+          : guard.state === STATE_SUSPICIOUS ? 'rgba(245,158,11,0.6)' : PALETTE.coneEdge;
       drawCone(ctx, poly, fill, edge);
     }
     // Cameras: wall mounts with a lens that follows the sweep.
@@ -181,13 +248,14 @@ export function createRenderer(canvas) {
       }
     }
     // Guards: dark uniforms, a facing tick, a meter arc, and a ? or !.
+    // Elites wear violet and carry a star: faster, wider, harder to shake.
     for (const guard of guards) {
       ctx.beginPath();
       ctx.arc(guard.x, guard.y, GUARD.radius, 0, Math.PI * 2);
       ctx.fillStyle = guard.state === STATE_ALERT ? '#7f1d1d' : '#334155';
       ctx.fill();
-      ctx.strokeStyle = guard.state === STATE_ALERT ? '#ef4444' : '#cbd5e1';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = guard.elite ? '#a78bfa' : guard.state === STATE_ALERT ? '#ef4444' : '#cbd5e1';
+      ctx.lineWidth = guard.elite ? 3 : 2;
       ctx.stroke();
       ctx.beginPath();
       ctx.moveTo(guard.x, guard.y);
@@ -206,6 +274,11 @@ export function createRenderer(canvas) {
         ctx.fillStyle = guard.state === STATE_ALERT ? '#ef4444' : '#f2c14e';
         ctx.font = 'bold 16px sans-serif';
         ctx.fillText(guard.state === STATE_ALERT ? '!' : '?', guard.x, guard.y - GUARD.radius - 10);
+      }
+      if (guard.elite) {
+        ctx.fillStyle = '#a78bfa';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillText('★', guard.x, guard.y - GUARD.radius - 24);
       }
     }
     // The thief: a hooded circle, darker and smaller while crouched.
@@ -247,7 +320,7 @@ export function createRenderer(canvas) {
     }
     for (const loot of level.loot) {
       if (loot.taken) continue;
-      ctx.fillStyle = PALETTE.gold;
+      ctx.fillStyle = loot.kind === 'gold' ? '#fbbf24' : loot.kind === 'data' ? '#22d3ee' : loot.kind === 'art' ? '#e879f9' : PALETTE.gold;
       ctx.fillRect(x0 + loot.x * scale - 2, y0 + loot.y * scale - 2, 4, 4);
     }
     ctx.fillStyle = PALETTE.exit;
@@ -283,7 +356,7 @@ export function createRenderer(canvas) {
     ctx.fillText(world.levelName, 16, 24);
     ctx.fillStyle = PALETTE.muted;
     ctx.font = '13px sans-serif';
-    ctx.fillText(`ROOM ${world.levelIndex + 1} / 3`, 16, 46);
+    ctx.fillText(`ROOM ${world.levelIndex + 1} / ${world.roomCount} · ${world.difficulty.toUpperCase()}`, 16, 46);
     // Alarm meter, centre stage.
     const alarmColor = world.alarm > 66 ? PALETTE.alarmHigh : world.alarm > 33 ? PALETTE.alarmMid : PALETTE.alarmLow;
     ctx.fillStyle = world.alarm > 66 ? '#ef4444' : PALETTE.muted;
@@ -296,7 +369,7 @@ export function createRenderer(canvas) {
     // Loot, tools, strikes, timer, score.
     ctx.fillStyle = PALETTE.gold;
     ctx.font = 'bold 16px sans-serif';
-    ctx.fillText(`◆ ${world.lootTaken}/${world.lootTotal}`, 680, 24);
+    ctx.fillText(`◆ ${world.lootTaken}/${world.lootTotal}  $${world.lootValue}`, 680, 24);
     ctx.fillStyle = PALETTE.text;
     ctx.font = '15px sans-serif';
     ctx.fillText(`◉ ${world.player.coins}   EMP ${world.player.emps}`, 680, 46);
@@ -329,6 +402,57 @@ export function createRenderer(canvas) {
       ctx.fillText(`EMP BLIND ${Math.ceil(world.empLeft)}s`, 460, 22);
       ctx.textAlign = 'left';
     }
+  }
+
+  function drawHack(world) {
+    const hack = world.hack;
+    const w = 560;
+    const h = 210;
+    const x = (VIEW_W - w) / 2;
+    const y = (VIEW_H - h) / 2;
+    ctx.fillStyle = PALETTE.panel;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    roundRect(ctx, x, y, w, h, 10);
+    ctx.fillStyle = '#12161f';
+    ctx.fill();
+    ctx.strokeStyle = '#22d3ee';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#22d3ee';
+    ctx.font = 'bold 26px sans-serif';
+    ctx.fillText(hack.kind === 'terminal' ? 'HACKING THE TERMINAL' : 'CRACKING THE SAFE', VIEW_W / 2, y + 44);
+    ctx.fillStyle = PALETTE.muted;
+    ctx.font = '14px sans-serif';
+    ctx.fillText('Stop the marker inside the green zone — three locks to open', VIEW_W / 2, y + 70);
+    // The timing bar: the green zone and the moving marker.
+    const barX = x + 40;
+    const barY = y + 104;
+    const barW = w - 80;
+    const barH = 26;
+    roundRect(ctx, barX, barY, barW, barH, 6);
+    ctx.fillStyle = '#232a3a';
+    ctx.fill();
+    roundRect(ctx, barX + hack.zone.from * barW, barY, (hack.zone.to - hack.zone.from) * barW, barH, 6);
+    ctx.fillStyle = '#39d98a';
+    ctx.fill();
+    const mx = barX + hack.marker * barW;
+    ctx.fillStyle = '#e8ecf3';
+    ctx.fillRect(mx - 3, barY - 8, 6, barH + 16);
+    // Round pips.
+    for (let i = 0; i < 3; i += 1) {
+      ctx.beginPath();
+      ctx.arc(VIEW_W / 2 - 30 + i * 30, y + 162, 7, 0, Math.PI * 2);
+      ctx.fillStyle = i < hack.round ? '#39d98a' : '#232a3a';
+      ctx.fill();
+      ctx.strokeStyle = '#39d98a';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    ctx.fillStyle = PALETTE.text;
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText('SPACE to lock · P to abort', VIEW_W / 2, y + h - 16);
+    ctx.textAlign = 'left';
   }
 
   function panel(title, lines, prompt, accent = PALETTE.gold) {
@@ -364,10 +488,11 @@ export function createRenderer(canvas) {
       drawField(world);
       drawHud(world);
       panel('SILENT VAULT', [
-        'Rook the thief. Three rooms. One getaway.',
+        'Rook the thief. Five rooms. One getaway.',
         'Cross the cones, pocket every relic, slip out unseen.',
         'WASD move · Shift run (loud) · C crouch (quiet)',
-        'Q throw a coin · E EMP the cameras · P pause',
+        'Q throw a coin · E EMP the cameras · F hack a terminal or safe',
+        `Difficulty: 1 Easy · 2 Normal · 3 Hard — ${world.difficulty.toUpperCase()}`,
       ], 'Press SPACE to start', PALETTE.gold);
       ctx.fillStyle = PALETTE.muted;
       ctx.font = '14px sans-serif';
@@ -379,18 +504,20 @@ export function createRenderer(canvas) {
     drawField(world);
     drawHud(world);
     drawMinimap(world);
+    if (world.hack) drawHack(world);
     if (screen === SCREEN_INTRO) {
-      panel(world.levelName, [world.levelSub, `Loot ${world.lootTotal} relics, then reach the green EXIT.`, `Guards: ${world.guards.length} · Cameras: ${world.cameras.length}`], 'Press SPACE to begin the room');
+      const elites = world.guards.filter((g) => g.elite).length;
+      panel(world.levelName, [world.levelSub, `Loot ${world.lootTotal} pieces, then reach the green EXIT.`, `Guards: ${world.guards.length}${elites > 0 ? ` (${elites} elite)` : ''} · Cameras: ${world.cameras.length}`], 'Press SPACE to begin the room');
     } else if (screen === SCREEN_PAUSED) {
       panel('PAUSED', ['The vault waits. The guards do not.', ''], 'Press P to resume');
     } else if (screen === SCREEN_BUSTED) {
-      panel('CAUGHT', [`The alarm hit 100%. Strikes left: ${world.strikes}.`, 'The room resets — the loot you kept stays kept.'], 'Press SPACE to try the room again', '#ef4444');
+      panel('CAUGHT', [`The alarm hit 100%. Strikes left: ${world.strikes}.`, 'The room resets — the loot you kept stays kept.', `Caught penalty -$${ALARM_PENALTY}`], 'Press SPACE to try the room again', '#ef4444');
     } else if (screen === SCREEN_CLEAR) {
-      panel('ROOM CLEAR', [`${extra.lootText ?? ''}`, `Time bonus +${extra.timeBonus ?? 0} · Ghost bonus +${extra.ghostBonus ?? 0}`], 'Press SPACE for the next room', PALETTE.exit);
+      panel('ROOM CLEAR', [`${extra.lootText ?? ''}`, `Time bonus +${extra.timeBonus ?? 0} · Ghost bonus +${extra.ghostBonus ?? 0}`, `${extra.breakdown ?? ''}`], 'Press SPACE for the next room', PALETTE.exit);
     } else if (screen === SCREEN_WIN) {
-      panel('THE GETAWAY', [`Every relic, every room. Final score: ${world.score}.`, `Best: ${world.best}`], 'Press SPACE to play again', PALETTE.exit);
+      panel('THE GETAWAY', [`Every piece, every room. Final score: ${world.score}.`, `${extra.breakdown ?? ''}`, `Best: ${world.best}`], 'Press SPACE to play again', PALETTE.exit);
     } else if (screen === SCREEN_OVER) {
-      panel('BURNED', ['Three strikes. The crew cuts you loose.', `Final score: ${world.score} · Best: ${world.best}`], 'Press SPACE to start over', '#ef4444');
+      panel('BURNED', ['Three strikes. The crew cuts you loose.', `${extra.breakdown ?? ''}`, `Final score: ${world.score} · Best: ${world.best}`], 'Press SPACE to start over', '#ef4444');
     }
     if (extra.toast) {
       ctx.fillStyle = 'rgba(10, 13, 20, 0.8)';

@@ -1,10 +1,12 @@
 // Keyboard and mouse input. Held keys give a steering vector; one-shot
-// presses (confirm, pause, coin, EMP) are queued as flags and taken once
-// by the loop, so a press between two frames is never lost or counted twice.
+// presses (confirm, pause, coin, EMP, hack) are queued as flags and taken
+// once by the loop, so a press between two frames is never lost or counted
+// twice. Difficulty keys (1/2/3) queue separately and are taken once.
 export const ACTION_CONFIRM = 1;
 export const ACTION_PAUSE = 2;
 export const ACTION_COIN = 4;
 export const ACTION_EMP = 8;
+export const ACTION_HACK = 16;
 
 const LEFT = new Set(['ArrowLeft', 'KeyA']);
 const RIGHT = new Set(['ArrowRight', 'KeyD']);
@@ -16,16 +18,24 @@ const CONFIRM = new Set(['Space', 'Enter']);
 const PAUSE = new Set(['KeyP', 'Escape']);
 const COIN = new Set(['KeyQ']);
 const EMP = new Set(['KeyE']);
+const HACK = new Set(['KeyF']);
+const DIFF_KEYS = { Digit1: 'easy', Digit2: 'normal', Digit3: 'hard' };
 
 export function createInput(target) {
   const held = new Set();
   let actions = 0;
+  let diff = null;
   let mouse = { x: 0, y: 0, clicked: false };
 
   function onKeyDown(event) {
     if (LEFT.has(event.code) || RIGHT.has(event.code) || UP.has(event.code) || DOWN.has(event.code)
       || RUN.has(event.code) || CROUCH.has(event.code)) {
       held.add(event.code);
+      event.preventDefault();
+      return;
+    }
+    if (DIFF_KEYS[event.code] && !event.repeat) {
+      diff = DIFF_KEYS[event.code];
       event.preventDefault();
       return;
     }
@@ -37,6 +47,8 @@ export function createInput(target) {
       if (!event.repeat) actions |= ACTION_COIN;
     } else if (EMP.has(event.code)) {
       if (!event.repeat) actions |= ACTION_EMP;
+    } else if (HACK.has(event.code)) {
+      if (!event.repeat) actions |= ACTION_HACK;
     } else {
       return;
     }
@@ -86,6 +98,12 @@ export function createInput(target) {
     /** Where the mouse is pointing, in 1280x720 canvas pixels. */
     aim() {
       return { x: mouse.x, y: mouse.y };
+    },
+    /** Take the queued difficulty choice ('easy' | 'normal' | 'hard'), if any. */
+    takeDifficulty() {
+      const taken = diff;
+      diff = null;
+      return taken;
     },
   };
 }

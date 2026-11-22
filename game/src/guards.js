@@ -4,7 +4,7 @@
 // A guard's vision cone is real geometry: rays are cast against the walls,
 // so the cone genuinely stops at cover. A thief behind a wall is safe;
 // a thief in the open, in the light, is not.
-import { FIELD_H, FIELD_W, GUARD, PLAYER, TILE } from './config.js';
+import { ELITE, FIELD_H, FIELD_W, GUARD, PLAYER, TILE } from './config.js';
 import { hasLineOfSight, isShadow, moveCircle } from './level.js';
 
 export const STATE_PATROL = 'patrol';
@@ -44,6 +44,7 @@ export function conePolygon(level, x, y, angle, range, halfAngle, rays) {
 
 export function createGuard(def) {
   const start = def.waypoints[0];
+  const elite = !!def.elite;
   return {
     x: start.x,
     y: start.y,
@@ -58,6 +59,13 @@ export function createGuard(def) {
     searchLeft: 0,
     investigate: null, // {x, y} a noise to check out
     bobPhase: Math.random() * Math.PI * 2,
+    elite,
+    // Elites are faster, see further and wider, and stay on a noise longer.
+    range: elite ? ELITE.visionRange : GUARD.visionRange,
+    coneHalf: elite ? ELITE.coneHalf : GUARD.coneHalf,
+    patrolSpeed: elite ? ELITE.patrol : GUARD.patrol,
+    chaseSpeed: elite ? ELITE.chase : GUARD.chase,
+    searchTime: elite ? ELITE.searchTime : GUARD.searchTime,
   };
 }
 
@@ -66,23 +74,30 @@ export function guardSees(level, guard, player, empActive) {
   const dx = player.x - guard.x;
   const dy = player.y - guard.y;
   const dist = Math.hypot(dx, dy);
-  const range = GUARD.visionRange * (empActive ? 0.7 : 1);
+  const range = guard.range * (empActive ? 0.7 : 1);
   if (dist > range || dist < 1) return 0;
   let diff = Math.atan2(dy, dx) - guard.angle;
   while (diff > Math.PI) diff -= Math.PI * 2;
   while (diff < -Math.PI) diff += Math.PI * 2;
-  if (Math.abs(diff) > GUARD.coneHalf) return 0;
+  if (Math.abs(diff) > guard.coneHalf) return 0;
   if (!hasLineOfSight(level, guard.x, guard.y, player.x, player.y)) return 0;
   return 1 - (dist / range) * 0.6; // closer reads stronger
 }
 
-/** A noise at (x, y): guards in earshot go to look. */
+/**
+ * A noise at (x, y): guards in earshot go to look. An elite that was
+ * searching or returning to patrol drops back to investigating instead —
+ * a distraction buys less time against one.
+ */
 export function hearNoise(guard, x, y) {
   const d = Math.hypot(x - guard.x, y - guard.y);
   if (d > GUARD.hearRange) return;
   if (guard.state === STATE_ALERT) return;
   guard.investigate = { x, y };
   if (guard.state === STATE_PATROL) {
+    guard.state = STATE_SUSPICIOUS;
+    guard.meter = Math.max(guard.meter, GUARD.suspiciousAt);
+  } else if (guard.elite && (guard.state === STATE_SEARCH || guard.state === STATE_RETURN)) {
     guard.state = STATE_SUSPICIOUS;
     guard.meter = Math.max(guard.meter, GUARD.suspiciousAt);
   }
@@ -152,7 +167,7 @@ export function updateGuard(level, guard, player, dt, empActive, events) {
         break;
       }
       const target = guard.waypoints[guard.waypoint];
-      if (moveToward(level, guard, target.x, target.y, GUARD.patrol, dt)) {
+      if (moveToward(level, guard, target.x, target.y, guard.patrolSpeed, dt)) {
         guard.waypoint = (guard.waypoint + 1) % guard.waypoints.length;
         guard.pause = GUARD.pauseAtWaypoint;
       }
@@ -164,19 +179,19 @@ export function updateGuard(level, guard, player, dt, empActive, events) {
         guard.state = STATE_PATROL;
         break;
       }
-      if (moveToward(level, guard, target.x, target.y, GUARD.patrol * 1.25, dt)) {
+      if (moveToward(level, guard, target.x, target.y, guard.patrolSpeed * 1.25, dt)) {
         guard.investigate = null;
         guard.state = STATE_SEARCH;
-        guard.searchLeft = GUARD.searchTime;
+        guard.searchLeft = guard.searchTime;
       }
       break;
     }
     case STATE_ALERT: {
       const target = guard.lastSeen ?? { x: player.x, y: player.y };
-      moveToward(level, guard, target.x, target.y, GUARD.chase, dt);
+      moveToward(level, guard, target.x, target.y, guard.chaseSpeed, dt);
       if (guard.loseSight > 2.5) {
         guard.state = STATE_SEARCH;
-        guard.searchLeft = GUARD.searchTime;
+        guard.searchLeft = guard.searchTime;
       }
       // Caught: the guard is on top of the thief.
       if (Math.hypot(player.x - guard.x, player.y - guard.y) < GUARD.radius + PLAYER.radius + 2) {
@@ -195,7 +210,7 @@ export function updateGuard(level, guard, player, dt, empActive, events) {
     }
     case STATE_RETURN: {
       const target = guard.waypoints[guard.waypoint];
-      if (moveToward(level, guard, target.x, target.y, GUARD.patrol * 1.3, dt)) {
+      if (moveToward(level, guard, target.x, target.y, guard.patrolSpeed * 1.3, dt)) {
         guard.state = STATE_PATROL;
         guard.meter = 0;
       }
